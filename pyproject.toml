@@ -1,5 +1,7 @@
 [project]
+name = "tweedledum"
 requires-python = ">=3.6"
+version = "1.1.2b"
 
 [build-system]
 requires = [
