@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import builtins
+
 import pytest
 
 import env
@@ -35,6 +39,9 @@ def test_reference_internal():
     assert str(b.get_a2()) == "A[43]"
     assert str(b.a2) == "A[43]"
 
+    if env.GRAALPY:
+        pytest.skip("ConstructorStats is incompatible with GraalPy.")
+
     astats, bstats = ConstructorStats.get(ms.A), ConstructorStats.get(ms.B)
     assert astats.alive() == 2
     assert bstats.alive() == 1
@@ -61,7 +68,6 @@ def test_importing():
     from pybind11_tests.modules import OD
 
     assert OD is OrderedDict
-    assert str(OD([(1, "a"), (2, "b")])) == "OrderedDict([(1, 'a'), (2, 'b')])"
 
 
 def test_pydoc():
@@ -75,6 +81,13 @@ def test_pydoc():
     assert pydoc.text.docmodule(pybind11_tests)
 
 
+def test_module_handle_type_name():
+    assert (
+        m.def_submodule.__doc__
+        == "def_submodule(arg0: types.ModuleType, arg1: str) -> types.ModuleType\n"
+    )
+
+
 def test_duplicate_registration():
     """Registering two things with the same name"""
 
@@ -86,12 +99,7 @@ def test_builtin_key_type():
 
     Previous versions of pybind11 would add a unicode key in python 2.
     """
-    if hasattr(__builtins__, "keys"):
-        keys = __builtins__.keys()
-    else:  # this is to make pypy happy since builtins is different there.
-        keys = __builtins__.__dict__.keys()
-
-    assert {type(k) for k in keys} == {str}
+    assert all(type(k) == str for k in dir(builtins))
 
 
 @pytest.mark.xfail("env.PYPY", reason="PyModule_GetName()")
@@ -99,9 +107,9 @@ def test_def_submodule_failures():
     sm = m.def_submodule(m, b"ScratchSubModuleName")  # Using bytes to show it works.
     assert sm.__name__ == m.__name__ + "." + "ScratchSubModuleName"
     malformed_utf8 = b"\x80"
-    if env.PYPY:
+    if env.PYPY or env.GRAALPY:
         # It is not worth the effort finding a trigger for a failure when running with PyPy.
-        pytest.skip("Sufficiently exercised on platforms other than PyPy.")
+        pytest.skip("Sufficiently exercised on platforms other than PyPy/GraalPy.")
     else:
         # Meant to trigger PyModule_GetName() failure:
         sm_name_orig = sm.__name__

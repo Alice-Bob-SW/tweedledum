@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import sys
 
 import pytest
+
+import env  # noqa: F401
 
 np = pytest.importorskip("numpy")
 eigen_tensor = pytest.importorskip("pybind11_tests.eigen_tensor")
@@ -11,14 +15,15 @@ try:
     submodules += [avoid.c_style, avoid.f_style]
 except ImportError as e:
     # Ensure config, build, toolchain, etc. issues are not masked here:
-    raise RuntimeError(
+    msg = (
         "import eigen_tensor_avoid_stl_array FAILED, while "
         "import pybind11_tests.eigen_tensor succeeded. "
         "Please ensure that "
         "test_eigen_tensor.cpp & "
         "eigen_tensor_avoid_stl_array.cpp "
         "are built together (or both are not built if Eigen is not available)."
-    ) from e
+    )
+    raise RuntimeError(msg) from e
 
 tensor_ref = np.empty((3, 5, 2), dtype=np.int64)
 
@@ -58,6 +63,7 @@ def assert_equal_tensor_ref(mat, writeable=True, modified=None):
 
 @pytest.mark.parametrize("m", submodules)
 @pytest.mark.parametrize("member_name", ["member", "member_view"])
+@pytest.mark.skipif("env.GRAALPY", reason="Different refcounting mechanism")
 def test_reference_internal(m, member_name):
     if not hasattr(sys, "getrefcount"):
         pytest.skip("No reference counting")
@@ -147,10 +153,7 @@ def test_bad_python_to_cpp_casts(m):
         m.round_trip_tensor_noconvert(tensor_ref.astype(np.float64))
     )
 
-    if m.needed_options == "F":
-        bad_options = "C"
-    else:
-        bad_options = "F"
+    bad_options = "C" if m.needed_options == "F" else "F"
     # Shape, dtype and the order need to be correct for a TensorMap cast
     with pytest.raises(
         TypeError, match=r"^round_trip_view_tensor\(\): incompatible function arguments"
@@ -173,19 +176,19 @@ def test_bad_python_to_cpp_casts(m):
             np.zeros((3, 5), dtype=np.float64, order=m.needed_options)
         )
 
+    temp = np.zeros((3, 5, 2), dtype=np.float64, order=m.needed_options)
     with pytest.raises(
         TypeError, match=r"^round_trip_view_tensor\(\): incompatible function arguments"
     ):
-        temp = np.zeros((3, 5, 2), dtype=np.float64, order=m.needed_options)
         m.round_trip_view_tensor(
             temp[:, ::-1, :],
         )
 
+    temp = np.zeros((3, 5, 2), dtype=np.float64, order=m.needed_options)
+    temp.setflags(write=False)
     with pytest.raises(
         TypeError, match=r"^round_trip_view_tensor\(\): incompatible function arguments"
     ):
-        temp = np.zeros((3, 5, 2), dtype=np.float64, order=m.needed_options)
-        temp.setflags(write=False)
         m.round_trip_view_tensor(temp)
 
 
@@ -268,23 +271,46 @@ def test_round_trip_references_actually_refer(m):
 @pytest.mark.parametrize("m", submodules)
 def test_doc_string(m, doc):
     assert (
-        doc(m.copy_tensor) == "copy_tensor() -> numpy.ndarray[numpy.float64[?, ?, ?]]"
+        doc(m.copy_tensor)
+        == 'copy_tensor() -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]"]'
     )
     assert (
         doc(m.copy_fixed_tensor)
-        == "copy_fixed_tensor() -> numpy.ndarray[numpy.float64[3, 5, 2]]"
+        == 'copy_fixed_tensor() -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[3, 5, 2]"]'
     )
     assert (
         doc(m.reference_const_tensor)
-        == "reference_const_tensor() -> numpy.ndarray[numpy.float64[?, ?, ?]]"
+        == 'reference_const_tensor() -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]"]'
     )
 
-    order_flag = f"flags.{m.needed_options.lower()}_contiguous"
+    order_flag = f'"flags.{m.needed_options.lower()}_contiguous"'
     assert doc(m.round_trip_view_tensor) == (
-        f"round_trip_view_tensor(arg0: numpy.ndarray[numpy.float64[?, ?, ?], flags.writeable, {order_flag}])"
-        + f" -> numpy.ndarray[numpy.float64[?, ?, ?], flags.writeable, {order_flag}]"
+        f'round_trip_view_tensor(arg0: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]", "flags.writeable", {order_flag}])'
+        f' -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]", "flags.writeable", {order_flag}]'
     )
     assert doc(m.round_trip_const_view_tensor) == (
-        f"round_trip_const_view_tensor(arg0: numpy.ndarray[numpy.float64[?, ?, ?], {order_flag}])"
-        + " -> numpy.ndarray[numpy.float64[?, ?, ?]]"
+        f'round_trip_const_view_tensor(arg0: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]", {order_flag}])'
+        ' -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]"]'
     )
+
+
+@pytest.mark.parametrize("m", submodules)
+def test_arraylike_signature(m, doc):
+    order_flag = f'"flags.{m.needed_options.lower()}_contiguous"'
+    assert doc(m.round_trip_tensor) == (
+        'round_trip_tensor(arg0: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, "[?, ?, ?]"])'
+        ' -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]"]'
+    )
+    assert doc(m.round_trip_tensor_noconvert) == (
+        'round_trip_tensor_noconvert(tensor: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]"])'
+        ' -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]"]'
+    )
+    assert doc(m.round_trip_view_tensor) == (
+        f'round_trip_view_tensor(arg0: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]", "flags.writeable", {order_flag}])'
+        f' -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[?, ?, ?]", "flags.writeable", {order_flag}]'
+    )
+    m.round_trip_tensor(tensor_ref.tolist())
+    with pytest.raises(TypeError, match="incompatible function arguments"):
+        m.round_trip_tensor_noconvert(tensor_ref.tolist())
+    with pytest.raises(TypeError, match="incompatible function arguments"):
+        m.round_trip_view_tensor(tensor_ref.tolist())
